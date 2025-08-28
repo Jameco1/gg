@@ -44,16 +44,27 @@
     let model, webcam, labelContainer, maxPredictions;
 
     // ✅ กำหนด MQTT
-    const broker = "wss://broker.hivemq.com:8884/mqtt"; 
-    const topic = "teachable/shape"; // ส่งค่าไปที่ Topic นี้
+    const broker = "wss://broker.hivemq.com:8000/mqtt"; 
+    const topic = "ccssrr11"; // เปลี่ยนชื่อ topic ให้ไม่ซ้ำกับคนอื่น
     const client = mqtt.connect(broker);
 
     client.on("connect", () => {
       console.log("✅ Connected to HiveMQ Broker");
+      client.subscribe(topic, () => {
+        console.log("📡 Subscribed to:", topic);
+      });
     });
 
     client.on("error", (err) => {
       console.error("❌ MQTT Error:", err);
+    });
+
+    client.on("close", () => {
+      console.warn("⚠️ Disconnected from broker");
+    });
+
+    client.on("message", (t, msg) => {
+      console.log("📩 ได้รับข้อความจาก Broker:", msg.toString());
     });
 
     async function init(facingMode) {
