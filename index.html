@@ -43,21 +43,24 @@
     const URL = "https://teachablemachine.withgoogle.com/models/ahaxFn-GG/";
     let model, webcam, labelContainer, maxPredictions;
 
-    // ✅ กำหนด MQTT
-    const client = mqtt.connect("wss://mqtt-dashboard.com:8884/mqtt");
-    const topic = "tm/ccssrr11/device1"; // เปลี่ยนชื่อ topic ให้ไม่ซ้ำกับคนอื่น
-    const client = mqtt.connect(broker);
+const broker = "wss://mqtt-dashboard.com:8000/mqtt"; // ใช้ port WebSocket
+const topic = "tm/ccssrr11/device1";
+const client = mqtt.connect(broker, {
+  clientId: "tm_device_" + Math.floor(Math.random() * 1000),
+  clean: true
+  });
 
-    client.on("connect", () => {
-      console.log("✅ Connected to HiveMQ Broker");
-      client.subscribe(topic, () => {
-        console.log("📡 Subscribed to:", topic);
-      });
-    });
+  client.on("connect", () => {
+  console.log("✅ Connected to HiveMQ Broker");
+  client.subscribe(topic, () => {
+    console.log("📡 Subscribed to:", topic);
+  });
+  });
 
-    client.on("error", (err) => {
-      console.error("❌ MQTT Error:", err);
-    });
+  client.on("error", (err) => {
+  console.error("❌ MQTT Error:", err);
+  });
+
 
     client.on("close", () => {
       console.warn("⚠️ Disconnected from broker");
@@ -143,4 +146,5 @@
   </script>
 </body>
 </html>  
+
 
