@@ -43,7 +43,7 @@
     const URL = "https://teachablemachine.withgoogle.com/models/ahaxFn-GG/";
     let model, webcam, labelContainer, maxPredictions;
 
-const broker = "wss://mqtt-dashboard.com:8000/mqtt"; // ใช้ port WebSocket
+const broker = "wss://broker.hivemq.com:8000/mqtt";
 const topic = "tm/ccssrr11/device1";
 const client = mqtt.connect(broker, {
   clientId: "tm_device_" + Math.floor(Math.random() * 1000),
@@ -146,5 +146,6 @@ const client = mqtt.connect(broker, {
   </script>
 </body>
 </html>  
+
 
 
