@@ -44,8 +44,8 @@
     let model, webcam, labelContainer, maxPredictions;
 
     // ✅ กำหนด MQTT
-    client.connect("mqtt-dashboard.com", 1883, 60)
-    const topic = "tm/ccssrr11/device1"; // เปลี่ยนชื่อ topic ให้ไม่ซ้ำกับคนอื่น
+    const broker = "wss://broker.hivemq.com:8884/mqtt"; 
+    const topic = "ccssrr11"; // เปลี่ยนชื่อ topic ให้ไม่ซ้ำกับคนอื่น
     const client = mqtt.connect(broker);
 
     client.on("connect", () => {
@@ -143,6 +143,3 @@
   </script>
 </body>
 </html>  
-
-
-
