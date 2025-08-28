@@ -1,131 +1,206 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Teachable Machine + MQTT (HiveMQ wss)</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-  <style>
-    body { font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 0; }
-    #webcam-container { max-width: 100%; margin: 10px auto; }
-    video { max-width: 100%; height: auto; }
-    #label-container { margin: 10px; font-size: 1.2em; }
-    button { padding: 10px 20px; font-size: 1em; margin: 5px; }
-  </style>
+<title>Teachable Machine + MQTT (WSS 8884)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+<script
+src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-i
+mage.min.js"></script>
+<script
+src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+<style>
+body { font-family: Arial; text-align: center; margin: 0; padding: 0; }
+#webcam-container { max-width: 100%; margin: 10px auto; }
+#webcam-container canvas { width: 100%; max-width: 640px; height: auto; }
+video { max-width: 100%; height: auto; }
+button { padding: 10px 20px; margin: 5px; font-size: 1em; }
+#label-container { margin-top: 10px; font-size: 1.2em; }
+.status { margin: 10px; padding: 10px; background: #f0f0f0; border-radius: 5px; }
+.error { background: #ffebee; color: #c62828; }
+.success { background: #e8f5e8; color: #2e7d32; }
+</style>
 </head>
 <body>
-  <h2>Teachable Machine Image Model + MQTT</h2>
-  <button onclick="init('environment')">Start Back Camera</button>
-  <button onclick="init('user')">Start Front Camera</button>
-  <button onclick="stop()">Stop</button>
-  <div id="webcam-container"></div>
-  <div id="label-container"></div>
+<h2>Teachable Machine + MQTT (WSS 8884)</h2>
+<button onclick="init('environment')">Start (Back Camera)</button>
+<button onclick="init('user')">Start (Front Camera)</button>
+<button onclick="stop()">Stop</button>
+<div id="status" class="status">กำ ลงัเตรยีมพรอ้ ม...</div>
+<div id="webcam-container"></div>
+<div id="label-container"></div>
+<script type="text/javascript">
+const URL = "https://teachablemachine.withgoogle.com/models/ahaxFn-GG/";
+const MQTT_TOPIC = "tm/ccssrr11/device1";
+let model, webcam, labelContainer, maxPredictions;
+let mqttClient;
+let sending = false;
+let paused = false;
+let timeoutId;
+let isRunning = false;
+function updateStatus(message, type = "status") {
+const statusDiv = document.getElementById("status");
+statusDiv.innerText = message;
+statusDiv.className = `status ${type}`;
 
-  <script>
-    const URL = "https://teachablemachine.withgoogle.com/models/ahaxFn-GG/";
-    let model, webcam, labelContainer, maxPredictions;
+}
+function connectMQTT() {
+return new Promise((resolve, reject) => {
+try {
+const clientId = "web_" + Math.floor(Math.random() * 10000);
+mqttClient = new Paho.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", clientId);
+mqttClient.onConnectionLost = (responseObject) => {
+console.error("MQTT lost:", responseObject.errorMessage);
+updateStatus("MQTT lost. Reconnecting...", "error");
+if (isRunning) {
+setTimeout(() => connectMQTT().catch(() => {}), 5000);
+}
+};
+mqttClient.connect({
+useSSL: true,
+timeout: 30,
+keepAliveInterval: 60,
+cleanSession: true,
+onSuccess: () => {
+console.log("MQTT connected");
+updateStatus("MQTT เชอ
+ื่
+มตอ่ สำ เร็จ", "success");
+resolve();
+},
+onFailure: (e) => {
+console.error("MQTT failed:", e.errorMessage);
+updateStatus("MQTT ลม้เหลว: " + e.errorMessage, "error");
+reject(e);
+}
+});
+} catch (error) {
+console.error("MQTT setup error:", error);
+updateStatus("MQTT setup error: " + (error?.message || JSON.stringify(error)),
+"error");
+reject(error);
+}
+});
+}
+async function init(facingMode) {
+try {
+isRunning = true;
+updateStatus("กำ ลงัเชอ
+ื่
+มตอ่ MQTT...");
+await connectMQTT();
+updateStatus("กำ ลงัโหลดโมเดล...");
 
-    // ---------------- MQTT ----------------
-    const broker = "ws://broker.hivemq.com:8884/mqtt"; // HiveMQ wss 8884
-    const topic = "tm/ccssrr11/device1";
-    const client = mqtt.connect(broker, {
-      clientId: "tm_device_" + Math.floor(Math.random() * 1000),
-      clean: true
-    });
+const modelURL = URL + "model.json";
+const metadataURL = URL + "metadata.json";
+model = await tmImage.load(modelURL, metadataURL);
+maxPredictions = model.getTotalClasses();
+updateStatus("โหลดโมเดลสำ เร็จ", "success");
+updateStatus("กำ ลงัเปิดกลอ้ ง...");
+webcam = new tmImage.Webcam(320, 240, false);
+try {
+await webcam.setup({ facingMode: facingMode || "environment" });
+await webcam.play();
+} catch (error) {
+if (error.name === "NotAllowedError") {
+updateStatus("กรณุ าอนุญาตการเขา้ถงึกลอ้ ง", "error");
+} else if (error.name === "NotFoundError") {
+updateStatus("ไมพ่ บกลอ้ งทร
+ี่
+ะบ"ุ , "error");
+} else {
+updateStatus("ไมส่ ามารถเปิดกลอ้ งได:้" + (error?.message || JSON.stringify(error)),
+"error");
+}
+throw error;
+}
+document.getElementById("webcam-container").innerHTML = '';
+document.getElementById("webcam-container").appendChild(webcam.canvas);
+labelContainer = document.getElementById("label-container");
+labelContainer.innerHTML = "";
+for (let i = 0; i < maxPredictions; i++) {
+labelContainer.appendChild(document.createElement("div"));
+}
+updateStatus("กลอ้ งเปิดสำ เร็จ - กำ ลงัตรวจจับ...", "success");
+window.requestAnimationFrame(loop);
+} catch (error) {
+console.error("Init error:", error);
+updateStatus("Error: " + (error?.message || JSON.stringify(error)), "error");
+isRunning = false;
+}
+}
+async function loop() {
+if (!paused && isRunning && webcam) {
+try {
+webcam.update();
+await predict();
+} catch (error) {
+updateStatus("Prediction error: " + (error?.message || JSON.stringify(error)), "error");
 
-    client.on("connect", () => {
-      console.log("✅ Connected to HiveMQ Broker");
-    });
+}
+}
+if (isRunning) {
+setTimeout(() => window.requestAnimationFrame(loop), 100);
+}
+}
+async function predict() {
+const prediction = await model.predict(webcam.canvas);
+for (let i = 0; i < maxPredictions; i++) {
+const prob = prediction[i].probability;
+const className = prediction[i].className;
+const text = `${className}: ${prob.toFixed(2)}`;
+if (labelContainer.childNodes[i]) labelContainer.childNodes[i].innerText = text;
+if (prob >= 0.9 && !sending) {
+sending = true;
+paused = true;
+updateStatus(`พบ ${className} - กำ ลงัสง่ ...`, "success");
+if (timeoutId) clearTimeout(timeoutId);
+timeoutId = setTimeout(() => {
+try {
+if (mqttClient && mqttClient.isConnected()) {
+const message = new Paho.MQTT.Message(className);
+message.destinationName = MQTT_TOPIC;
+mqttClient.send(message);
+updateStatus(`สง่ แลว้: ${className}`, "success");
+} else {
+updateStatus("MQTT ไมไ่ ดเ้ชอ
+ื่
+มตอ่ ", "error");
+}
+} catch (error) {
+updateStatus("สง่ MQTT ลม้เหลว: " + (error?.message || JSON.stringify(error)),
+"error");
+} finally {
+sending = false;
+paused = false;
+setTimeout(() => {
+if (isRunning) updateStatus("กำ ลงัตรวจจับ...", "success");
+}, 1000);
+}
+}, 3000);
+break;
+}
+}
+}
 
-    client.on("error", (err) => {
-      console.error("❌ MQTT Error:", err);
-    });
-
-    client.on("close", () => {
-      console.warn("⚠️ Disconnected from broker");
-    });
-
-    client.on("message", (t, msg) => {
-      console.log("📩 Message from broker:", msg.toString());
-    });
-
-    // ---------------- Teachable Machine ----------------
-    async function init(facingMode) {
-      const modelURL = URL + "model.json";
-      const metadataURL = URL + "metadata.json";
-      model = await tmImage.load(modelURL, metadataURL);
-      maxPredictions = model.getTotalClasses();
-
-      webcam = new tmImage.Webcam(224, 224, false);
-      try {
-        await webcam.setup({ facingMode: facingMode });
-        await webcam.play();
-        window.requestAnimationFrame(loop);
-      } catch (e) {
-        console.error("Webcam setup failed:", e);
-        document.getElementById("label-container").innerText = "Error: " + e.message;
-        return;
-      }
-
-      document.getElementById("webcam-container").appendChild(webcam.canvas);
-      labelContainer = document.getElementById("label-container");
-      labelContainer.innerHTML = "";
-      for (let i = 0; i < maxPredictions; i++) {
-        labelContainer.appendChild(document.createElement("div"));
-      }
-    }
-
-    async function loop() {
-      webcam.update();
-      await predict();
-      window.requestAnimationFrame(loop);
-    }
-
-    async function predict() {
-      const prediction = await model.predict(webcam.canvas);
-
-      // หาค่าที่มีโอกาสสูงสุด
-      let bestClass = prediction[0].className;
-      let bestProb = prediction[0].probability;
-
-      for (let i = 1; i < maxPredictions; i++) {
-        if (prediction[i].probability > bestProb) {
-          bestClass = prediction[i].className;
-          bestProb = prediction[i].probability;
-        }
-      }
-
-      // แสดงผล
-      for (let i = 0; i < maxPredictions; i++) {
-        const classPrediction = prediction[i].className + ": " + prediction[i].probability.toFixed(2);
-        labelContainer.childNodes[i].innerHTML = classPrediction;
-      }
-
-      // ส่งค่า MQTT ถ้ามั่นใจ > 0.8
-      if (bestProb > 0.8 && client.connected) {
-        let message = "";
-        if (bestClass === "Circle") message = "วงกลม";
-        else if (bestClass === "Triangle") message = "สามเหลี่ยม";
-        else if (bestClass === "Square") message = "สี่เหลี่ยม";
-
-        if (message !== "") {
-          client.publish(topic, message, {}, (err) => {
-            if (err) console.error("❌ Publish failed:", err);
-            else console.log("📤 Sent to MQTT:", message);
-          });
-        }
-      }
-    }
-
-    function stop() {
-      if (webcam) {
-        webcam.stop();
-        document.getElementById("webcam-container").innerHTML = '';
-        document.getElementById("label-container").innerHTML = '';
-      }
-    }
-  </script>
+function stop() {
+isRunning = false;
+paused = false;
+sending = false;
+if (timeoutId) clearTimeout(timeoutId);
+if (webcam) {
+try { webcam.stop(); } catch (e) {}
+webcam = null;
+}
+document.getElementById("webcam-container").innerHTML = '';
+document.getElementById("label-container").innerHTML = '';
+if (mqttClient && mqttClient.isConnected()) {
+try { mqttClient.disconnect(); } catch (e) {}
+mqttClient = null;
+}
+updateStatus("หยดุ การทำ งานแลว้", "status");
+}
+window.addEventListener('beforeunload', stop);
+</script>
 </body>
 </html>
-
