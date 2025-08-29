@@ -1,114 +1,121 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Teachable Machine with MQTT</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Teachable Machine + Dual MQTT</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image"></script>
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
-    video { width: 320px; border: 2px solid black; margin: 10px; }
-    .status { margin-top: 15px; padding: 10px; border-radius: 8px; background: #f4f4f4; }
-    .ok { color: green; font-weight: bold; }
-    .error { color: red; font-weight: bold; }
+    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+    video { width: 300px; border: 3px solid #333; border-radius: 12px; }
+    #log { text-align: left; margin-top: 20px; padding: 10px; background: #f5f5f5; height: 200px; overflow-y: auto; border: 1px solid #ccc; }
+    .ok { color: green; }
+    .err { color: red; }
   </style>
 </head>
 <body>
-  <h2>Teachable Machine with ESP32 (MQTT)</h2>
-  <video id="webcam" autoplay playsinline muted></video>
-  <div class="status" id="status">กำลังโหลดโมเดล...</div>
+  <h1>AI Camera + MQTT Dual Sender</h1>
+  <video id="webcam" autoplay playsinline></video>
+  <div>
+    <button id="startBtn">Start Camera & Model</button>
+  </div>
+  <h2>Logs</h2>
+  <div id="log"></div>
 
-  <script>
-    const URL = "model/"; // ใส่ path โมเดล Teachable Machine
-    let model, webcam, ctx, maxPredictions;
+<script>
+const logBox = document.getElementById("log");
+function log(msg, type="ok") {
+  const el = document.createElement("div");
+  el.className = type;
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logBox.appendChild(el);
+  logBox.scrollTop = logBox.scrollHeight;
+}
 
-    // MQTT ตั้งค่า 2 ช่องทาง (1883 → ESP32, 8884 → HiveMQTT)
-    const mqttOptions1883 = {
-      protocol: "ws",
-      clientId: "webClient1883_" + Math.random().toString(16).substr(2, 8),
-    };
-    const mqttOptions8884 = {
-      protocol: "wss",
-      clientId: "webClient8884_" + Math.random().toString(16).substr(2, 8),
-    };
+// -------- CONFIG --------
+const MODEL_URL = "https://teachablemachine.withgoogle.com/models/YOUR_MODEL_URL/"; // <= ใส่ลิงก์ model
+const TOPIC = "real2"; 
 
-    const broker1883 = "ws://broker.hivemq.com:8000/mqtt"; // Web → ESP32
-    const broker8884 = "wss://broker.hivemq.com:8884/mqtt"; // Web → HiveMQTT
+// HiveMQ (8884 SSL)
+const HIVE_OPTIONS = {
+  protocol: "wss",
+  hostname: "broker.hivemq.com",
+  port: 8884,
+  path: "/mqtt",
+  clientId: "web_hive_" + Math.random().toString(16).substr(2, 8),
+  clean: true,
+  connectTimeout: 4000,
+};
 
-    const client1883 = mqtt.connect(broker1883, mqttOptions1883);
-    const client8884 = mqtt.connect(broker8884, mqttOptions8884);
+// ESP32 Local Broker (1883 TCP → ผ่าน WebSocket Proxy)
+const ESP_OPTIONS = {
+  protocol: "ws",
+  hostname: "YOUR_PROXY_IP", // ต้องมี proxy.js รันในเครื่อง/เซิร์ฟเวอร์
+  port: 8083,                // Proxy จะ forward ไป 1883
+  path: "/mqtt",
+  clientId: "web_esp_" + Math.random().toString(16).substr(2, 8),
+  clean: true,
+  connectTimeout: 4000,
+};
 
-    client1883.on("connect", () => updateStatus("เชื่อมต่อ MQTT 1883 สำเร็จ ✅", true));
-    client8884.on("connect", () => updateStatus("เชื่อมต่อ MQTT 8884 สำเร็จ ✅", true));
+let model, webcam, ctx;
+let hiveClient, espClient;
 
-    client1883.on("error", (err) => updateStatus("MQTT 1883 Error ❌ " + err, false));
-    client8884.on("error", (err) => updateStatus("MQTT 8884 Error ❌ " + err, false));
+async function init() {
+  try {
+    log("Loading model...");
+    model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
+    log("Model loaded!");
 
-    async function init() {
-      try {
-        const modelURL = URL + "model.json";
-        const metadataURL = URL + "metadata.json";
+    // webcam
+    const videoEl = document.getElementById("webcam");
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    videoEl.srcObject = stream;
+    log("Camera started");
 
-        model = await tmImage.load(modelURL, metadataURL);
-        maxPredictions = model.getTotalClasses();
+    // connect MQTT
+    hiveClient = mqtt.connect(HIVE_OPTIONS);
+    espClient = mqtt.connect(ESP_OPTIONS);
 
-        const flip = true;
-        webcam = new tmImage.Webcam(320, 320, flip);
-        await webcam.setup();
-        await webcam.play();
-        window.requestAnimationFrame(loop);
+    hiveClient.on("connect", () => log("HiveMQ connected ✔️"));
+    hiveClient.on("error", (err) => log("HiveMQ error: " + err, "err"));
 
-        document.getElementById("webcam").srcObject = webcam.webcam;
+    espClient.on("connect", () => log("ESP32 MQTT connected ✔️"));
+    espClient.on("error", (err) => log("ESP32 MQTT error: " + err, "err"));
 
-        updateStatus("โมเดลพร้อมแล้ว ✅", true);
-      } catch (err) {
-        updateStatus("กล้องไม่ทำงาน ❌: " + err, false);
+    runLoop(videoEl);
+  } catch (err) {
+    log("Init error: " + err.message, "err");
+  }
+}
+
+async function runLoop(videoEl) {
+  while (true) {
+    const prediction = await model.predict(videoEl);
+    let best = prediction.reduce((a, b) => a.probability > b.probability ? a : b);
+
+    if (best.probability > 0.8) {
+      let msg = best.className;
+      log(`Detected: ${msg}`);
+
+      // publish ไป HiveMQ
+      if (hiveClient && hiveClient.connected) {
+        hiveClient.publish(TOPIC, msg);
+        log("Sent to HiveMQ: " + msg);
+      }
+      // publish ไป ESP32
+      if (espClient && espClient.connected) {
+        espClient.publish(TOPIC, msg);
+        log("Sent to ESP32: " + msg);
       }
     }
+    await new Promise(r => setTimeout(r, 1000)); // 1s
+  }
+}
 
-    async function loop() {
-      webcam.update();
-      await predict();
-      window.requestAnimationFrame(loop);
-    }
-
-    async function predict() {
-      const prediction = await model.predict(webcam.canvas);
-      let highest = { className: "", probability: 0 };
-
-      prediction.forEach(p => {
-        if (p.probability > highest.probability) highest = p;
-      });
-
-      if (highest.probability > 0.85) {
-        // ตัวอย่าง: วงกลมส่งไปทั้ง 2 broker
-        if (highest.className === "circle") {
-          client1883.publish("esp32/topic", "circle");
-          client8884.publish("hivemq/topic", "circle");
-          updateStatus("วงกลม → ส่ง 1883 + 8884 แล้ว ✅", true);
-        }
-        // สามเหลี่ยมส่ง HiveMQTT อย่างเดียว
-        else if (highest.className === "triangle") {
-          client8884.publish("hivemq/topic", "triangle");
-          updateStatus("สามเหลี่ยม → ส่งไป HiveMQTT ✅", true);
-        }
-        // สี่เหลี่ยมส่ง ESP32 อย่างเดียว
-        else if (highest.className === "square") {
-          client1883.publish("esp32/topic", "square");
-          updateStatus("สี่เหลี่ยม → ส่งไป ESP32 ✅", true);
-        }
-      }
-    }
-
-    function updateStatus(msg, ok) {
-      const el = document.getElementById("status");
-      el.innerHTML = msg;
-      el.className = ok ? "status ok" : "status error";
-    }
-
-    init();
-  </script>
+document.getElementById("startBtn").addEventListener("click", init);
+</script>
 </body>
 </html>
