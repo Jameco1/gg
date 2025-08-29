@@ -1,156 +1,116 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-<meta charset="utf-8" />
-<title>Shape -> MQTT (Diagnostics, Dual Port)</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-
-<!-- Libs -->
+<meta charset="UTF-8">
+<title>Shapes → MQTT Dual-Port (GitHub Ready)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
-
 <style>
-/* --- keep your CSS same as before --- */
-:root{--ok:#16a34a;--warn:#eab308;--err:#dc2626;--muted:#6b7280;--bg:#0b1020;--panel:#11172a;--panel2:#0f1526;--text:#e5e7eb;}
-body{margin:0;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial;background:radial-gradient(1000px 600px at 10% -20%,#1b2550,var(--bg));color:var(--text);display:flex;flex-direction:column;align-items:center}
-header,footer{max-width:1100px;width:100%;padding:16px}
-h1{margin:0 0 6px}
-.grid{max-width:1100px;width:100%;display:grid;gap:12px;grid-template-columns:360px 1fr;padding:8px}
-@media(max-width:960px){.grid{grid-template-columns:1fr}}
-.card{background:linear-gradient(180deg,var(--panel),var(--panel2));border-radius:16px;border:1px solid rgba(255,255,255,.06);padding:12px}
-.row{display:flex;gap:8px;align-items:center;margin:6px 0}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--muted)}
-.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
-button{border:1px solid rgba(255,255,255,.12);background:#111827;color:#fff;padding:9px 14px;border-radius:10px;cursor:pointer;margin-right:8px}
-#webcam-container canvas{max-width:640px;width:100%;border-radius:12px;border:2px solid rgba(255,255,255,.06);transition:box-shadow .2s}
-.labels{display:grid;gap:6px;margin-top:8px}
-.bar{background:rgba(255,255,255,.06);border-radius:8px;overflow:hidden;position:relative}
-.bar>span{display:block;height:22px;line-height:22px;padding:0 8px}
-.bar::after{content:"";position:absolute;inset:0;width:var(--w,0%);background:linear-gradient(90deg,#2563eb,#4f46e5);opacity:.35}
-.log{height:200px;background:#0b1224;border-radius:12px;padding:8px;overflow:auto;font:12px ui-monospace,Consolas,monospace}
+body{margin:0;font-family:sans-serif;background:#0b1020;color:#e5e7eb;display:flex;flex-direction:column;align-items:center}
+button{padding:10px 14px;margin:5px;border-radius:8px;background:#111827;color:#fff;cursor:pointer}
+#webcam-container canvas{border-radius:12px;border:2px solid rgba(255,255,255,0.06);max-width:640px;width:100%;}
+.log{height:200px;overflow:auto;background:#11172a;border-radius:12px;padding:8px;font:12px monospace;width:100%;max-width:700px;margin-top:10px;}
 </style>
 </head>
 <body>
-<header>
-<h1>Teachable Machine (Shapes) → MQTT Dual Port</h1>
-<div>ตรวจจับ: วงกลม / สามเหลี่ยม / สี่เหลี่ยม ส่งไป MQTT HiveMQ SSL 8884 และ ESP32 1883</div>
-</header>
 
-<div class="grid">
-<section class="card">
-<h3>สถานะ</h3>
-<div class="row"><span id="dot-mqtt" class="dot"></span> HiveMQ: <span id="mqtt-state">-</span></div>
-<div class="row"><span id="dot-esp" class="dot"></span> ESP32: <span id="esp-state">-</span></div>
-<div class="row"><span id="dot-model" class="dot"></span> Model: <span id="model-state">-</span></div>
-<div class="row"><span id="dot-cam" class="dot"></span> Camera: <span id="cam-state">-</span></div>
-<div class="row"><span id="dot-loop" class="dot"></span> Loopback RX: <span id="rx-state">-</span></div>
-</section>
-
-<section class="card">
-<h3>ควบคุม</h3>
-<div>
-<button onclick="startAll('environment')">Start Back</button>
-<button onclick="startAll('user')">Start Front</button>
+<h1>Teachable Machine Shapes → MQTT Dual-Port</h1>
+<p>คลิกปุ่ม Start เพื่อเปิดกล้องและเริ่มทำนาย</p>
+<button onclick="startAll('environment')">Start Back Cam</button>
+<button onclick="startAll('user')">Start Front Cam</button>
 <button onclick="stopAll()">Stop</button>
-<button onclick="safePublish('TEST:'+Date.now())">Test Publish</button>
-<button onclick="$('#log').innerHTML=''">Clear Log</button>
-</div>
-<div style="margin-top:8px;font-size:13px">
-HiveMQ SSL 8884 & ESP32 WS 8000 • Topic: <code>Opzaa1</code>
-</div>
-</section>
-
-<section class="card" style="grid-column:1/-1">
-<h3>กล้อง & การทำนาย</h3>
 <div id="webcam-container"></div>
-<div class="labels" id="label-container"></div>
-</section>
-
-<section class="card" style="grid-column:1/-1">
-<h3>Log</h3>
 <div class="log" id="log"></div>
-</section>
-</div>
-
-<footer>โมเดลต้องตั้งชื่อคลาสให้ชัด เช่น <code>วงกลม</code>, <code>สามเหลี่ยม</code>, <code>สี่เหลี่ยม</code></footer>
 
 <script>
-/* ========= CONFIG ========= */
 const TM_URL = "https://teachablemachine.withgoogle.com/models/ahaxFn-GG/";
 const MQTT_TOPIC = "Opzaa1";
-const CONF_THRESHOLD = 0.80;
+const CONF_THRESHOLD = 0.8;
 const PUBLISH_DEBOUNCE_MS = 2500;
 
-/* HiveMQ SSL 8884 */
-const MQTT_HOST_SSL = "broker.hivemq.com";
-const MQTT_PORT_SSL = 8884;
-const MQTT_PATH_SSL = "/mqtt";
+// HiveMQ SSL 8884
+const MQTT_HOST_SSL = "broker.hivemq.com", MQTT_PORT_SSL = 8884, MQTT_PATH_SSL="/mqtt";
+// ESP32 WS 8000
+const MQTT_HOST_ESP = "broker.hivemq.com", MQTT_PORT_ESP=8000, MQTT_PATH_ESP="/mqtt";
 
-/* ESP32 WS 8000 (non-SSL WebSocket) */
-const MQTT_HOST_ESP = "broker.hivemq.com"; // หรือ Proxy IP
-const MQTT_PORT_ESP = 8000;
-const MQTT_PATH_ESP = "/mqtt";
+// UI
+const logEl = document.getElementById('log');
+const log = (...args)=>{ const d=document.createElement('div'); d.textContent=args.join(' '); logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight; console.log(...args); };
 
-/* ========= UI helpers ========= */
-const $ = s => document.querySelector(s);
-const dot = (el,state)=>{ el.classList.remove('ok','warn','err'); if(state) el.classList.add(state); };
-const log = (...args)=>{ const el=$('#log'); const d=document.createElement('div'); d.textContent=args.join(' '); el.appendChild(d); el.scrollTop=el.scrollHeight; console.log(...args); };
+// MQTT Clients
+let mqttSSL=null, mqttESP=null, clientIdSSL=null, clientIdESP=null;
+async function connectMQTT(){
+  return new Promise((resolve)=>{
+    // HiveMQ SSL
+    clientIdSSL = "web_ssl_"+Math.floor(Math.random()*1e6);
+    mqttSSL = new Paho.MQTT.Client(MQTT_HOST_SSL, MQTT_PORT_SSL, MQTT_PATH_SSL, clientIdSSL);
+    mqttSSL.onConnectionLost = resp=>log("HiveMQ lost", resp?.errorMessage||"");
+    mqttSSL.onMessageArrived = msg=>log("RX SSL", msg.destinationName, msg.payloadString);
+    mqttSSL.connect({useSSL:true, timeout:20, onSuccess:()=>log("HiveMQ connected"), onFailure:e=>log("HiveMQ failed", e)});
 
-/* ========= MQTT Clients ========= */
-let mqttClientSSL=null, mqttClientESP=null, clientIdSSL=null, clientIdESP=null;
-
-function connectMQTT(){
-    return new Promise((resolve,reject)=>{
-        // --- HiveMQ SSL 8884 ---
-        clientIdSSL = "web_ssl_" + Math.floor(Math.random()*1e6);
-        mqttClientSSL = new Paho.MQTT.Client(MQTT_HOST_SSL, Number(MQTT_PORT_SSL), MQTT_PATH_SSL, clientIdSSL);
-        mqttClientSSL.onConnectionLost = resp => { dot($('#dot-mqtt'),'err'); $('#mqtt-state').textContent='lost'; log('HiveMQ lost', resp?.errorMessage||''); };
-        mqttClientSSL.onMessageArrived = msg => { dot($('#dot-loop'),'ok'); $('#rx-state').textContent = `${msg.destinationName}: ${msg.payloadString}`; log('RX SSL:', msg.destinationName, msg.payloadString); };
-        const willSSL = new Paho.MQTT.Message(JSON.stringify({clientIdSSL,status:'offline'}));
-        willSSL.destinationName = MQTT_TOPIC+"/status"; willSSL.retained=true;
-        mqttClientSSL.connect({
-            useSSL:true, timeout:20, keepAliveInterval:60, cleanSession:true, willMessage:willSSL,
-            onSuccess:()=>{
-                dot($('#dot-mqtt'),'ok'); $('#mqtt-state').textContent='connected';
-                mqttClientSSL.subscribe(MQTT_TOPIC+"/#"); dot($('#dot-sub'),'ok'); $('#sub-state').textContent='subscribed';
-                resolve();
-            },
-            onFailure:e=>{ dot($('#dot-mqtt'),'err'); $('#mqtt-state').textContent='failed'; reject(e); }
-        });
-
-        // --- ESP32 WS 8000 ---
-        clientIdESP = "web_esp_" + Math.floor(Math.random()*1e6);
-        mqttClientESP = new Paho.MQTT.Client(MQTT_HOST_ESP, Number(MQTT_PORT_ESP), MQTT_PATH_ESP, clientIdESP);
-        mqttClientESP.onConnectionLost = resp => { dot($('#dot-esp'),'err'); $('#esp-state').textContent='lost'; log('ESP32 lost', resp?.errorMessage||''); };
-        mqttClientESP.onMessageArrived = msg => { dot($('#dot-loop'),'ok'); $('#rx-state').textContent = `${msg.destinationName}: ${msg.payloadString}`; log('RX ESP:', msg.destinationName, msg.payloadString); };
-        const willESP = new Paho.MQTT.Message(JSON.stringify({clientIdESP,status:'offline'}));
-        willESP.destinationName = MQTT_TOPIC+"/status"; willESP.retained=true;
-        mqttClientESP.connect({
-            useSSL:false, timeout:20, keepAliveInterval:60, cleanSession:true, willMessage:willESP,
-            onSuccess:()=>{ dot($('#dot-esp'),'ok'); $('#esp-state').textContent='connected'; mqttClientESP.subscribe(MQTT_TOPIC+"/#"); },
-            onFailure:e=>{ dot($('#dot-esp'),'err'); $('#esp-state').textContent='failed'; }
-        });
-    });
+    // ESP32 WS
+    clientIdESP = "web_esp_"+Math.floor(Math.random()*1e6);
+    mqttESP = new Paho.MQTT.Client(MQTT_HOST_ESP, MQTT_PORT_ESP, MQTT_PATH_ESP, clientIdESP);
+    mqttESP.onConnectionLost = resp=>log("ESP32 lost", resp?.errorMessage||"");
+    mqttESP.onMessageArrived = msg=>log("RX ESP", msg.destinationName, msg.payloadString);
+    mqttESP.connect({useSSL:false, timeout:20, onSuccess:()=>log("ESP32 connected"), onFailure:e=>log("ESP32 failed", e)});
+    resolve();
+  });
 }
 
-/* ========= Publish ========= */
+function safePublishSSL(msg){ if(mqttSSL&&mqttSSL.isConnected()) mqttSSL.send(new Paho.MQTT.Message(msg)); }
+function safePublishESP(msg){ if(mqttESP&&mqttESP.isConnected()) mqttESP.send(new Paho.MQTT.Message(msg)); }
+
 function publishDual(shape){
-    // --- Rule: วงกลม ส่งทั้งสอง ---
-    if(shape==='วงกลม'||shape==='Circle'){
-        safePublishSSL(shape);
-        safePublishESP(shape);
-    }
-    // --- Rule: สามเหลี่ยม ส่ง ESP32 ---
-    else if(shape==='สามเหลี่ยม'||shape==='Triangle'){
-        safePublishESP(shape);
-    }
-    // --- Rule: สี่เหลี่ยม ส่ง ESP32 ---
-    else if(shape==='สี่เหลี่ยม'||shape==='Square'){
-        safePublishESP(shape);
-    }
+  if(shape==='วงกลม'||shape==='Circle'){ safePublishSSL(shape); safePublishESP(shape); log("Publish dual:",shape); }
+  else if(shape==='สามเหลี่ยม'||shape==='Triangle'){ safePublishESP(shape); log("Publish ESP only:",shape); }
+  else if(shape==='สี่เหลี่ยม'||shape==='Square'){ safePublishESP(shape); log("Publish ESP only:",shape); }
 }
 
-function safePublishSSL(payload){
-    if(!mqttClientSSL || !mqttClientSSL.isConnected()){ log('SSL Publish skipped'); return; }
-    const m=new Paho
+// Teachable Machine
+let model, webcam, maxPredictions, lastSentAt=0, running=false;
+async function loadModel(){
+  log("Loading model...");
+  model = await tmImage.load(TM_URL+'model.json', TM_URL+'metadata.json');
+  maxPredictions = model.getTotalClasses();
+  log("Model loaded:", maxPredictions,"classes");
+}
+
+async function startCamera(facingMode){
+  webcam = new tmImage.Webcam(320,320,false);
+  await webcam.setup({facingMode}); // ต้อง await
+  await webcam.play();
+  document.getElementById('webcam-container').innerHTML='';
+  document.getElementById('webcam-container').appendChild(webcam.canvas);
+  log("Camera streaming:", facingMode);
+}
+
+async function predictLoop(){
+  if(!running) return;
+  webcam.update();
+  const preds = await model.predict(webcam.canvas);
+  let best = preds.reduce((a,b)=>b.probability>a.probability?b:a);
+  const now = Date.now();
+  if(best.probability>=CONF_THRESHOLD && now-lastSentAt>=PUBLISH_DEBOUNCE_MS){
+    lastSentAt = now;
+    publishDual(best.className);
+  }
+  requestAnimationFrame(predictLoop);
+}
+
+async function startAll(facing){
+  running=false;
+  await connectMQTT();
+  await loadModel();
+  await startCamera(facing);
+  running=true;
+  predictLoop();
+}
+
+function stopAll(){ running=false; try{webcam.stop()}catch{}; document.getElementById('webcam-container').innerHTML=''; log("Stopped"); }
+
+</script>
+</body>
+</html>
