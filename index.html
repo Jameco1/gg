@@ -1,93 +1,113 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Teachable Machine MQTT</title>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <!-- TensorFlow.js -->
+  <title>Teachable Machine with MQTT</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
   <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest"></script>
-
-  <!-- MQTT.js -->
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
-
   <style>
     body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
-    video { border: 3px solid #333; border-radius: 10px; width: 320px; height: 240px; }
-    #status { margin-top: 15px; font-weight: bold; color: red; }
+    video { width: 320px; border: 2px solid black; margin: 10px; }
+    .status { margin-top: 15px; padding: 10px; border-radius: 8px; background: #f4f4f4; }
+    .ok { color: green; font-weight: bold; }
+    .error { color: red; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h1>🎥 Teachable Machine + MQTT</h1>
-  <video id="webcam" autoplay playsinline></video>
-  <p id="status">⏳ กำลังรอกล้อง...</p>
+  <h2>Teachable Machine with ESP32 (MQTT)</h2>
+  <video id="webcam" autoplay playsinline muted></video>
+  <div class="status" id="status">กำลังโหลดโมเดล...</div>
 
-  <script type="text/javascript">
-    const URL = "https://teachablemachine.withgoogle.com/models/xxxxxxx/"; // 👈 เปลี่ยนเป็น model ของคุณ
-    let model, webcam, ctx, labelContainer, maxPredictions;
+  <script>
+    const URL = "model/"; // ใส่ path โมเดล Teachable Machine
+    let model, webcam, ctx, maxPredictions;
 
-    // MQTT client สองตัว (1883 และ 8884)
-    const broker = "broker.hivemq.com";
-    const topicESP32 = "real2";   // ESP32
-    const topicHive = "realHive"; // HiveMQTT
+    // MQTT ตั้งค่า 2 ช่องทาง (1883 → ESP32, 8884 → HiveMQTT)
+    const mqttOptions1883 = {
+      protocol: "ws",
+      clientId: "webClient1883_" + Math.random().toString(16).substr(2, 8),
+    };
+    const mqttOptions8884 = {
+      protocol: "wss",
+      clientId: "webClient8884_" + Math.random().toString(16).substr(2, 8),
+    };
 
-    // Connect MQTT (1883 = WebSocket, 8884 = Secure WebSocket)
-    const client1883 = mqtt.connect(`wss://${broker}:8083/mqtt`);
-    const client8884 = mqtt.connect(`wss://${broker}:8884/mqtt`);
+    const broker1883 = "ws://broker.hivemq.com:8000/mqtt"; // Web → ESP32
+    const broker8884 = "wss://broker.hivemq.com:8884/mqtt"; // Web → HiveMQTT
 
-    client1883.on("connect", () => console.log("✅ Connected to MQTT 1883"));
-    client8884.on("connect", () => console.log("✅ Connected to MQTT 8884"));
+    const client1883 = mqtt.connect(broker1883, mqttOptions1883);
+    const client8884 = mqtt.connect(broker8884, mqttOptions8884);
+
+    client1883.on("connect", () => updateStatus("เชื่อมต่อ MQTT 1883 สำเร็จ ✅", true));
+    client8884.on("connect", () => updateStatus("เชื่อมต่อ MQTT 8884 สำเร็จ ✅", true));
+
+    client1883.on("error", (err) => updateStatus("MQTT 1883 Error ❌ " + err, false));
+    client8884.on("error", (err) => updateStatus("MQTT 8884 Error ❌ " + err, false));
 
     async function init() {
       try {
         const modelURL = URL + "model.json";
         const metadataURL = URL + "metadata.json";
 
-        // โหลดโมเดล
         model = await tmImage.load(modelURL, metadataURL);
         maxPredictions = model.getTotalClasses();
 
-        // ขอสิทธิ์กล้อง
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        document.getElementById("status").innerText = "✅ กล้องพร้อมแล้ว";
-        const webcamElement = document.getElementById("webcam");
-        webcamElement.srcObject = stream;
+        const flip = true;
+        webcam = new tmImage.Webcam(320, 320, flip);
+        await webcam.setup();
+        await webcam.play();
+        window.requestAnimationFrame(loop);
 
-        // loop ประมวลผล
-        setInterval(() => predict(webcamElement), 2000);
+        document.getElementById("webcam").srcObject = webcam.webcam;
 
+        updateStatus("โมเดลพร้อมแล้ว ✅", true);
       } catch (err) {
-        console.error("❌ Camera error:", err);
-        document.getElementById("status").innerText =
-          "❌ เปิดกล้องไม่ได้: " + err.message;
+        updateStatus("กล้องไม่ทำงาน ❌: " + err, false);
       }
     }
 
-    async function predict(video) {
-      const prediction = await model.predict(video);
-      let best = prediction[0];
+    async function loop() {
+      webcam.update();
+      await predict();
+      window.requestAnimationFrame(loop);
+    }
 
-      // หาค่าที่มั่นใจที่สุด
-      for (let i = 1; i < prediction.length; i++) {
-        if (prediction[i].probability > best.probability) {
-          best = prediction[i];
+    async function predict() {
+      const prediction = await model.predict(webcam.canvas);
+      let highest = { className: "", probability: 0 };
+
+      prediction.forEach(p => {
+        if (p.probability > highest.probability) highest = p;
+      });
+
+      if (highest.probability > 0.85) {
+        // ตัวอย่าง: วงกลมส่งไปทั้ง 2 broker
+        if (highest.className === "circle") {
+          client1883.publish("esp32/topic", "circle");
+          client8884.publish("hivemq/topic", "circle");
+          updateStatus("วงกลม → ส่ง 1883 + 8884 แล้ว ✅", true);
+        }
+        // สามเหลี่ยมส่ง HiveMQTT อย่างเดียว
+        else if (highest.className === "triangle") {
+          client8884.publish("hivemq/topic", "triangle");
+          updateStatus("สามเหลี่ยม → ส่งไป HiveMQTT ✅", true);
+        }
+        // สี่เหลี่ยมส่ง ESP32 อย่างเดียว
+        else if (highest.className === "square") {
+          client1883.publish("esp32/topic", "square");
+          updateStatus("สี่เหลี่ยม → ส่งไป ESP32 ✅", true);
         }
       }
-
-      console.log("📌 ผลลัพธ์:", best.className, best.probability.toFixed(2));
-
-      // เงื่อนไขส่ง MQTT แยก port
-      if (best.className === "circle") {
-        client8884.publish(topicHive, "circle");
-        console.log("➡️ ส่งไป HiveMQTT (8884): circle");
-      } else if (best.className === "square") {
-        client1883.publish(topicESP32, "square");
-        console.log("➡️ ส่งไป ESP32 (1883): square");
-      }
     }
 
-    // เริ่มระบบ
+    function updateStatus(msg, ok) {
+      const el = document.getElementById("status");
+      el.innerHTML = msg;
+      el.className = ok ? "status ok" : "status error";
+    }
+
     init();
   </script>
 </body>
