@@ -1,121 +1,445 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="th">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Teachable Machine + Dual MQTT</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image"></script>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <meta charset="utf-8" />
+  <title>Teachable Machine + MQTT (WSS 8884) — Diagnostics</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Libs -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
-    video { width: 300px; border: 3px solid #333; border-radius: 12px; }
-    #log { text-align: left; margin-top: 20px; padding: 10px; background: #f5f5f5; height: 200px; overflow-y: auto; border: 1px solid #ccc; }
-    .ok { color: green; }
-    .err { color: red; }
+    :root {
+      --ok: #16a34a;      /* green */
+      --warn: #eab308;    /* amber */
+      --err: #dc2626;     /* red */
+      --muted: #6b7280;   /* gray */
+      --bg: #0b1020;
+      --panel: #11172a;
+      --panel-2: #0f1526;
+      --text: #e5e7eb;
+      --accent: #60a5fa;
+    }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+      background: radial-gradient(1000px 600px at 10% -20%, #1b2550, var(--bg));
+      color: var(--text); display: flex; flex-direction: column; align-items: center;
+    }
+    header { width: 100%; max-width: 1100px; padding: 24px 16px 8px; }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 700; letter-spacing: .2px; }
+    .sub { color: #9ca3af; font-size: 13px; }
+
+    .grid { width: 100%; max-width: 1100px; display: grid; gap: 12px; grid-template-columns: 360px 1fr; padding: 8px 16px 24px; box-sizing: border-box; }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+
+    .card { background: linear-gradient(180deg, var(--panel), var(--panel-2)); border-radius: 16px; box-shadow: 0 6px 30px rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.06); }
+    .card h3 { margin: 0; padding: 14px 16px; font-size: 15px; border-bottom: 1px solid rgba(255,255,255,.06); color: #cbd5e1; font-weight: 600; }
+    .card .content { padding: 14px 16px 16px; }
+
+    .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 14px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 0 2px rgba(0,0,0,.2); }
+    .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--warn); }
+    .dot.err { background: var(--err); }
+
+    .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { appearance: none; border: 1px solid rgba(255,255,255,.12); background: #111827; color: #fff; padding: 9px 14px; font-size: 14px; border-radius: 10px; cursor: pointer; }
+    button:hover { filter: brightness(1.05); }
+
+    .kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; font-size: 13px; color: #cbd5e1; }
+    .kv code { color: #e5e7eb; }
+
+    .log { height: 200px; background: #0b1224; border-radius: 12px; padding: 8px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: 12px; border: 1px solid rgba(255,255,255,.06); }
+    .pill { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font-size:12px; border: 1px solid rgba(255,255,255,.14); }
+    .pill.ok{ color:#bbf7d0; border-color:#14532d; background:rgba(22,163,74,.15); }
+    .pill.err{ color:#fecaca; border-color:#7f1d1d; background:rgba(220,38,38,.14); }
+    .pill.warn{ color:#fde68a; border-color:#78350f; background:rgba(234,179,8,.12); }
+
+    #webcam-container { padding: 12px; }
+    #webcam-container canvas, video { width: 100%; max-width: 640px; height: auto; display: block; margin: 0 auto; border-radius: 12px; border: 1px solid rgba(255,255,255,.06); }
+
+    .labels { font-size: 13px; display: grid; gap: 6px; }
+    .labels .bar { background: rgba(255,255,255,.06); border-radius: 8px; overflow: hidden; position: relative; }
+    .labels .bar > span { display: block; height: 22px; padding: 0 8px; line-height: 22px; }
+    .labels .bar::after { content: ""; position: absolute; inset: 0; width: var(--w, 0%); background: linear-gradient(90deg, #2563eb, #4f46e5); opacity: .35; }
+
+    footer { width: 100%; max-width: 1100px; padding: 6px 16px 18px; color: #9ca3af; font-size: 12px; }
+    .mono { font-family: ui-monospace, Menlo, Monaco, Consolas, monospace; }
   </style>
 </head>
 <body>
-  <h1>AI Camera + MQTT Dual Sender</h1>
-  <video id="webcam" autoplay playsinline></video>
-  <div>
-    <button id="startBtn">Start Camera & Model</button>
+  <header>
+    <h1>Teachable Machine + MQTT (WSS 8884) — โหมดวิเคราะห์</h1>
+    <div class="sub">หน้าเว็บนี้ออกแบบมาเพื่อ <b>ยืนยันให้ชัด ๆ</b> ว่า: กล้องเปิดแล้ว, โมเดลโหลดแล้ว, MQTT ต่อสำเร็จจริง, และมีการ <b>Publish/Subscribe</b> ไปที่ broker (8884) ได้จริง พร้อมแผง log แบบเรียลไทม์</div>
+  </header>
+
+  <div class="grid">
+    <!-- Left: Controls & Status -->
+    <section class="card">
+      <h3>สถานะระบบ</h3>
+      <div class="content">
+        <div class="row"><span id="dot-mqtt" class="dot"></span> MQTT: <span id="mqtt-state" class="mono">disconnected</span></div>
+        <div class="row"><span id="dot-model" class="dot"></span> Model: <span id="model-state" class="mono">idle</span></div>
+        <div class="row"><span id="dot-cam" class="dot"></span> Camera: <span id="cam-state" class="mono">idle</span></div>
+        <div class="row"><span id="dot-sub" class="dot"></span> Subscribe: <span id="sub-state" class="mono">not subscribed</span></div>
+        <div class="row"><span id="dot-loop" class="dot"></span> Loopback RX: <span id="rx-state" class="mono">no messages</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>ควบคุม</h3>
+      <div class="content">
+        <div class="btns">
+          <button id="btn-start-back">Start Back Camera</button>
+          <button id="btn-start-front">Start Front Camera</button>
+          <button id="btn-stop">Stop</button>
+          <button id="btn-test-pub">Test Publish</button>
+          <button id="btn-clear-log">Clear Log</button>
+        </div>
+        <div style="height:8px"></div>
+        <div class="kv">
+          <div>Broker</div><div><code id="cfg-broker">wss://broker.hivemq.com:8884/mqtt</code></div>
+          <div>Topic</div><div><code id="cfg-topic">real2</code></div>
+          <div>Client ID</div><div><code id="cfg-client">(will set on connect)</code></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Webcam & Predictions -->
+    <section class="card" style="grid-column: 1 / -1;">
+      <h3>กล้อง & การทำนาย</h3>
+      <div class="content">
+        <div id="webcam-container"></div>
+        <div class="labels" id="label-container"></div>
+      </div>
+    </section>
+
+    <!-- Logs -->
+    <section class="card" style="grid-column: 1 / -1;">
+      <h3>Log แบบเรียลไทม์</h3>
+      <div class="content">
+        <div class="log" id="log"></div>
+      </div>
+    </section>
   </div>
-  <h2>Logs</h2>
-  <div id="log"></div>
+
+  <footer>
+    
+    <div>ถ้า MQTT ต่อได้จริง จุด <span class="pill ok">MQTT</span> จะเป็นสีเขียว, และเมื่อ publish เอง ระบบจะ <span class="pill warn">รับข้อความของตัวเองกลับมา</span> (loopback) ถ้า subscribe สำเร็จ — ใช้เพื่อพิสูจน์ว่าบรอคเกอร์รับ–ส่งได้จริง</div>
+  </footer>
 
 <script>
-const logBox = document.getElementById("log");
-function log(msg, type="ok") {
-  const el = document.createElement("div");
-  el.className = type;
-  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  logBox.appendChild(el);
-  logBox.scrollTop = logBox.scrollHeight;
-}
+/*********************
+ * CONFIG ZONE
+ *********************/
+const TM_URL = "https://teachablemachine.withgoogle.com/models/fevj7vAAp/"; // <-- เปลี่ยนได้ตามโปรเจ็กต์คุณ
+const MQTT_HOST = "broker.hivemq.com";   // 8884 only, WSS
+const MQTT_PORT = 8884;
+const MQTT_PATH = "/mqtt";
+const MQTT_TOPIC = "real2";              // <-- เปลี่ยนได้
+const CONF_THRESHOLD = 0.90;              // มั่นใจ >= 0.90 ค่อยส่ง
+const PUBLISH_DEBOUNCE_MS = 2500;         // กันสแปม
 
-// -------- CONFIG --------
-const MODEL_URL = "https://teachablemachine.withgoogle.com/models/YOUR_MODEL_URL/"; // <= ใส่ลิงก์ model
-const TOPIC = "real2"; 
-
-// HiveMQ (8884 SSL)
-const HIVE_OPTIONS = {
-  protocol: "wss",
-  hostname: "broker.hivemq.com",
-  port: 8884,
-  path: "/mqtt",
-  clientId: "web_hive_" + Math.random().toString(16).substr(2, 8),
-  clean: true,
-  connectTimeout: 4000,
+/*********************
+ * UI helpers
+ *********************/
+const $ = (sel) => document.querySelector(sel);
+const dot = (el, state) => {
+  el.classList.remove('ok','warn','err');
+  if (state === 'ok') el.classList.add('ok');
+  else if (state === 'warn') el.classList.add('warn');
+  else if (state === 'err') el.classList.add('err');
+};
+const log = (...args) => {
+  const el = $('#log');
+  const line = document.createElement('div');
+  line.textContent = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  el.appendChild(line); el.scrollTop = el.scrollHeight;
+  console.log(...args);
 };
 
-// ESP32 Local Broker (1883 TCP → ผ่าน WebSocket Proxy)
-const ESP_OPTIONS = {
-  protocol: "ws",
-  hostname: "YOUR_PROXY_IP", // ต้องมี proxy.js รันในเครื่อง/เซิร์ฟเวอร์
-  port: 8083,                // Proxy จะ forward ไป 1883
-  path: "/mqtt",
-  clientId: "web_esp_" + Math.random().toString(16).substr(2, 8),
-  clean: true,
-  connectTimeout: 4000,
-};
+/*********************
+ * MQTT via Paho (WSS 8884)
+ *********************/
+let mqttClient = null;
+let clientId = null;
+let subscribed = false;
 
-let model, webcam, ctx;
-let hiveClient, espClient;
+function connectMQTT() {
+  return new Promise((resolve, reject) => {
+    try {
+      clientId = `web_${Math.floor(Math.random()*10_000)}`;
+      $('#cfg-client').textContent = clientId;
+      log('MQTT: connecting to', `${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`, 'clientId=', clientId);
 
-async function init() {
-  try {
-    log("Loading model...");
-    model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
-    log("Model loaded!");
+      mqttClient = new Paho.MQTT.Client(MQTT_HOST, Number(MQTT_PORT), MQTT_PATH, clientId);
 
-    // webcam
-    const videoEl = document.getElementById("webcam");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    videoEl.srcObject = stream;
-    log("Camera started");
+      mqttClient.onConnectionLost = (resp) => {
+        $('#mqtt-state').textContent = 'connection lost';
+        dot($('#dot-mqtt'), 'err');
+        dot($('#dot-sub'), null); $('#sub-state').textContent = 'not subscribed';
+        subscribed = false;
+        log('MQTT lost:', resp && resp.errorMessage ? resp.errorMessage : resp);
+      };
 
-    // connect MQTT
-    hiveClient = mqtt.connect(HIVE_OPTIONS);
-    espClient = mqtt.connect(ESP_OPTIONS);
+      mqttClient.onMessageArrived = (msg) => {
+        // Loopback + external RX
+        dot($('#dot-loop'), 'ok');
+        $('#rx-state').textContent = `${msg.destinationName}: ${msg.payloadString}`;
+        log('MQTT RX:', msg.destinationName, msg.payloadString);
+      };
 
-    hiveClient.on("connect", () => log("HiveMQ connected ✔️"));
-    hiveClient.on("error", (err) => log("HiveMQ error: " + err, "err"));
+      // Last Will retained (online/offline heartbeat)
+      const will = new Paho.MQTT.Message(JSON.stringify({clientId, status:'offline'}));
+      will.destinationName = `${MQTT_TOPIC}/status`;
+      will.retained = true; will.qos = 0;
 
-    espClient.on("connect", () => log("ESP32 MQTT connected ✔️"));
-    espClient.on("error", (err) => log("ESP32 MQTT error: " + err, "err"));
+      mqttClient.connect({
+        useSSL: true,
+        timeout: 20,
+        keepAliveInterval: 60,
+        cleanSession: true,
+        mqttVersion: 4, // MQTT 3.1.1
+        willMessage: will,
+        onSuccess: () => {
+          $('#mqtt-state').textContent = 'connected';
+          dot($('#dot-mqtt'), 'ok');
+          log('MQTT connected ✅');
 
-    runLoop(videoEl);
-  } catch (err) {
-    log("Init error: " + err.message, "err");
-  }
-}
+          // Advertise online
+          const online = new Paho.MQTT.Message(JSON.stringify({clientId, status:'online', ts: Date.now()}));
+          online.destinationName = `${MQTT_TOPIC}/status`;
+          online.retained = true; online.qos = 0;
+          mqttClient.send(online);
 
-async function runLoop(videoEl) {
-  while (true) {
-    const prediction = await model.predict(videoEl);
-    let best = prediction.reduce((a, b) => a.probability > b.probability ? a : b);
-
-    if (best.probability > 0.8) {
-      let msg = best.className;
-      log(`Detected: ${msg}`);
-
-      // publish ไป HiveMQ
-      if (hiveClient && hiveClient.connected) {
-        hiveClient.publish(TOPIC, msg);
-        log("Sent to HiveMQ: " + msg);
-      }
-      // publish ไป ESP32
-      if (espClient && espClient.connected) {
-        espClient.publish(TOPIC, msg);
-        log("Sent to ESP32: " + msg);
-      }
+          // Subscribe to own topic for loopback diagnostics
+          mqttClient.subscribe(MQTT_TOPIC, {qos:0});
+          mqttClient.subscribe(`${MQTT_TOPIC}/#`, {qos:0});
+          subscribed = true; dot($('#dot-sub'), 'ok'); $('#sub-state').textContent = `subscribed to ${MQTT_TOPIC}/#`;
+          resolve();
+        },
+        onFailure: (e) => {
+          $('#mqtt-state').textContent = `failed: ${e.errorMessage || 'unknown'}`;
+          dot($('#dot-mqtt'), 'err');
+          log('MQTT failed ❌', e);
+          reject(e);
+        }
+      });
+    } catch (err) {
+      $('#mqtt-state').textContent = 'setup error';
+      dot($('#dot-mqtt'), 'err');
+      log('MQTT setup error ❌', err);
+      reject(err);
     }
-    await new Promise(r => setTimeout(r, 1000)); // 1s
+  });
+}
+
+function safePublish(payload) {
+  if (!mqttClient || !mqttClient.isConnected()) {
+    log('Publish skipped (not connected)');
+    return false;
+  }
+  try {
+    const msg = new Paho.MQTT.Message(payload);
+    msg.destinationName = MQTT_TOPIC;
+    mqttClient.send(msg);
+    log('MQTT TX:', MQTT_TOPIC, payload);
+    return true;
+  } catch (e) {
+    log('Publish error:', e);
+    return false;
   }
 }
 
-document.getElementById("startBtn").addEventListener("click", init);
+/*********************
+ * Teachable Machine
+ *********************/
+let model, webcam, labelContainer, maxPredictions;
+let lastSentAt = 0;
+let running = false;
+
+async function loadModel() {
+  $('#model-state').textContent = 'loading...';
+  dot($('#dot-model'), 'warn');
+  const modelURL = TM_URL + 'model.json';
+  const metadataURL = TM_URL + 'metadata.json';
+  model = await tmImage.load(modelURL, metadataURL);
+  maxPredictions = model.getTotalClasses();
+  $('#model-state').textContent = `ready (${maxPredictions} classes)`;
+  dot($('#dot-model'), 'ok');
+}
+
+async function startCamera(facingMode) {
+  $('#cam-state').textContent = 'requesting...';
+  dot($('#dot-cam'), 'warn');
+  const size = Math.min(360, Math.max(224, Math.floor(window.innerWidth*0.6)));
+  webcam = new tmImage.Webcam(size, size, false);
+  try {
+    await webcam.setup({ facingMode });
+    await webcam.play();
+    $('#webcam-container').innerHTML = '';
+    $('#webcam-container').appendChild(webcam.canvas);
+    $('#cam-state').textContent = 'streaming';
+    dot($('#dot-cam'), 'ok');
+  } catch (e) {
+    $('#cam-state').textContent = `error: ${e?.message || e}`;
+    dot($('#dot-cam'), 'err');
+    throw e;
+  }
+}
+
+function buildLabels() {
+  labelContainer = $('#label-container');
+  labelContainer.innerHTML = '';
+  for (let i=0;i<maxPredictions;i++) {
+    const row = document.createElement('div');
+    row.className = 'bar';
+    const span = document.createElement('span');
+    span.textContent = '-';
+    row.appendChild(span); labelContainer.appendChild(row);
+  }
+}
+
+async function loop() {
+  if (!running) return;
+  webcam.update();
+  await predict();
+  requestAnimationFrame(loop);
+}
+
+async function predict() {
+  const preds = await model.predict(webcam.canvas);
+  // render
+  for (let i=0;i<maxPredictions;i++) {
+    const p = preds[i];
+    const row = labelContainer.children[i];
+    const perc = Math.round(p.probability*100);
+    row.style.setProperty('--w', perc+'%');
+    row.firstChild.textContent = `${p.className}: ${p.probability.toFixed(2)}`;
+  }
+  // pick best
+  let best = preds[0];
+  for (let i=1;i<preds.length;i++) if (preds[i].probability > best.probability) best = preds[i];
+  // gate
+  const now = Date.now();
+  if (best.probability >= CONF_THRESHOLD && now - lastSentAt >= PUBLISH_DEBOUNCE_MS) {
+    lastSentAt = now;
+    const ok = safePublish(best.className);
+    dot($('#dot-loop'), ok ? 'warn' : 'err');
+  }
+}
+
+/*********************
+ * Orchestration
+ *********************/
+async function startAll(facing) {
+  running = false;
+  await connectMQTT().catch(()=>{});
+  await loadModel();
+  await startCamera(facing);
+  buildLabels();
+  running = true; loop();
+}
+
+function stopAll() {
+  running = false;
+  try { if (webcam) webcam.stop(); } catch {}
+  $('#webcam-container').innerHTML = '';
+  $('#label-container').innerHTML = '';
+  $('#cam-state').textContent = 'stopped'; dot($('#dot-cam'), null);
+  if (mqttClient && mqttClient.isConnected()) {
+    try {
+      const offline = new Paho.MQTT.Message(JSON.stringify({clientId, status:'offline', ts: Date.now()}));
+      offline.destinationName = `${MQTT_TOPIC}/status`;
+      offline.retained = true; mqttClient.send(offline);
+    } catch {}
+    try { mqttClient.disconnect(); } catch {}
+  }
+  $('#mqtt-state').textContent = 'disconnected'; dot($('#dot-mqtt'), null);
+  $('#sub-state').textContent = 'not subscribed'; dot($('#dot-sub'), null);
+}
+
+/*********************
+ * Events
+ *********************/
+$('#btn-start-back').onclick = () => startAll('environment');
+$('#btn-start-front').onclick = () => startAll('user');
+$('#btn-stop').onclick = () => stopAll();
+$('#btn-test-pub').onclick = () => safePublish('TEST:'+Date.now());
+$('#btn-clear-log').onclick = () => { $('#log').innerHTML = ''; };
+
+// Show initial cfg
+$('#cfg-broker').textContent = `wss://${MQTT_HOST}:${MQTT_PORT}${MQTT_PATH}`;
+$('#cfg-topic').textContent = MQTT_TOPIC;
 </script>
+
+<!--
+================================================================================
+OPTIONAL BACKEND PROXY (ใช้เมื่อ WSS:8884 ใน browser ของคุณถูกบล็อก/CORS)
+================================================================================
+ไฟล์: server.js
+---------------------------------
+import express from 'express';
+import { WebSocketServer } from 'ws';
+import mqtt from 'mqtt';
+
+const HTTP_PORT = process.env.PORT || 3000;  // ให้ Browser ต่อ WS/WSS มาที่พอร์ตนี้
+const MQTT_URL  = 'mqtt://broker.hivemq.com:1883'; // ต่อ MQTT แบบ TCP (ไม่ติด CORS)
+const TOPIC     = process.env.TOPIC || 'real2';
+
+const app = express();
+const server = app.listen(HTTP_PORT, ()=> console.log(`Proxy listening on ${HTTP_PORT}`));
+const wss = new WebSocketServer({ server });
+
+const m = mqtt.connect(MQTT_URL, { keepalive: 60, reconnectPeriod: 2000 });
+m.on('connect', ()=> console.log('✅ MQTT connected to', MQTT_URL));
+m.on('error',   (e)=> console.error('❌ MQTT error:', e.message));
+
+m.subscribe(`${TOPIC}/#`);
+
+wss.on('connection', (ws)=>{
+  console.log('🌐 Browser connected');
+  ws.send(JSON.stringify({type:'hello', ts:Date.now()}));
+
+  ws.on('message', (buf)=>{
+    const text = buf.toString();
+    console.log('WS -> MQTT:', text);
+    m.publish(TOPIC, text);
+  });
+
+  const onMsg = (topic, payload) => {
+    const msg = payload.toString();
+    ws.send(JSON.stringify({type:'mqtt', topic, msg, ts:Date.now()}));
+  };
+  m.on('message', onMsg);
+
+  ws.on('close', ()=>{
+    m.removeListener('message', onMsg);
+    console.log('Web client disconnected');
+  });
+});
+
+/*
+Deploy แบบง่าย:
+1) package.json
+{
+  "name":"tm-mqtt-proxy",
+  "type":"module",
+  "dependencies": {"express":"^4.19.2","ws":"^8.18.0","mqtt":"^5.10.1"},
+  "scripts": {"start":"node server.js"}
+}
+2) npm i
+3) node server.js  (local)  หรือ deploy บน Render/Railway/Heroku
+4) ในหน้า HTML เปลี่ยนจาก Paho ไปใช้ native WebSocket ไปยัง proxy ของคุณ:
+   const ws = new WebSocket('wss://<your-proxy-domain>');
+   ws.onopen = ()=> ws.send('TEST from browser');
+   ws.onmessage = (e)=> console.log('Proxy RX:', e.data);
+   // และให้ฝั่ง proxy เป็นคนคุย MQTT กับ HiveMQ แทน (เลี่ยง CORS)
+*/
+-->
+
 </body>
-</html>
+</html> อธิบายโค้ดนี้ตามความเข้าใจของนาย ช่วยคิดนานๆเพื่อคำตอบที่ดีที่สุด
