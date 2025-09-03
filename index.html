@@ -111,8 +111,8 @@ const MQTT_HOST="broker.hivemq.com";
 const MQTT_PORT=8884;
 const MQTT_PATH="/mqtt";
 const MQTT_TOPIC="Opzaa1";
-const CONF_THRESHOLD=0.80;
-const PUBLISH_DEBOUNCE_MS=5000;
+const CONF_THRESHOLD=0.90;
+const PUBLISH_DEBOUNCE_MS=5500;
 
 const $=s=>document.querySelector(s);
 const dot=(el,state)=>{ el.classList.remove('ok','warn','err'); if(state==='ok') el.classList.add('ok'); else if(state==='warn') el.classList.add('warn'); else if(state==='err') el.classList.add('err'); };
@@ -185,4 +185,5 @@ $('#cfg-topic').textContent=MQTT_TOPIC;
 </script>
 </body>
 </html>
+
 
